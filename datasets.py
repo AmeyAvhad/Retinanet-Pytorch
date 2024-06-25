@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 import os
 import glob as glob
-
+import matplotlib.pyplot as plt
 from xml.etree import ElementTree as et
 from config import (
     CLASSES, RESIZE_TO, TRAIN_DIR, BATCH_SIZE
@@ -154,18 +154,17 @@ def create_valid_loader(valid_dataset, num_workers=0):
     )
     return valid_loader
 
-
-# execute `datasets.py`` using Python command from 
+# Execute `datasets.py` using Python command from 
 # Terminal to visualize sample images
 # USAGE: python datasets.py
 if __name__ == '__main__':
-    # sanity check of the Dataset pipeline with sample visualization
+    # Sanity check of the Dataset pipeline with sample visualization
     dataset = CustomDataset(
         TRAIN_DIR, RESIZE_TO, RESIZE_TO, CLASSES
     )
     print(f"Number of training images: {len(dataset)}")
     
-    # function to visualize a single sample
+    # Function to visualize a single sample
     def visualize_sample(image, target):
         for box_num in range(len(target['boxes'])):
             box = target['boxes'][box_num]
@@ -186,8 +185,11 @@ if __name__ == '__main__':
                 (0, 0, 255), 
                 2
             )
-        cv2.imshow('Image', image)
-        cv2.waitKey(0)
+        # Use Matplotlib to display the image
+        plt.figure(figsize=(10, 10))
+        plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        plt.axis('off')
+        plt.show()
         
     NUM_SAMPLES_TO_VISUALIZE = 5
     for i in range(NUM_SAMPLES_TO_VISUALIZE):
