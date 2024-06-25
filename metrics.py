@@ -57,7 +57,7 @@ def calculate_precision_recall(predictions, targets, iou_threshold=0.5):
     return precision, recall
 
 # Load the model
-model = torch.load('best_model.pth')  # Load your model here
+model = torch.load('/content/outputs/best_model.pth')  # Load your model here
 model.eval()
 
 # Assuming you have a DataLoader for your test dataset
