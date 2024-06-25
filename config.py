@@ -8,13 +8,13 @@ NUM_WORKERS = 4 # Number of parallel workers for data loading.
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 # Training images and XML files directory.
-TRAIN_DIR = 'data/BCCD.v3-raw.voc/train'
+TRAIN_DIR = '/content/Retinanet-1/train'
 # Validation images and XML files directory.
-VALID_DIR = 'data/BCCD.v3-raw.voc/valid'
+VALID_DIR = '/content/Retinanet-1/valid'
 
 # Classes: 0 index is reserved for background.
 CLASSES = [
-    '__background__', 'RBC', 'WBC', 'Platelets'
+    '__background__', 'A','B','C','D','E','I','J','K','S','T','U','V','undefined','RBC', 'WBC', 'Platelets'
 ]
 
 NUM_CLASSES = len(CLASSES)
