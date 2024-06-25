@@ -1,13 +1,19 @@
+import os
+import argparse
+import torch
+import matplotlib.pyplot as plt
+import time
+
 from config import (
     DEVICE, 
     NUM_CLASSES, 
-    NUM_EPOCHS, 
     OUT_DIR,
     VISUALIZE_TRANSFORMED_IMAGES, 
     NUM_WORKERS,
     RESIZE_TO,
     VALID_DIR,
-    TRAIN_DIR
+    TRAIN_DIR,
+    NUM_EPOCHS  # Import NUM_EPOCHS here
 )
 from model import create_model
 from custom_utils import (
@@ -27,12 +33,15 @@ from datasets import (
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 from torch.optim.lr_scheduler import StepLR
 
-import torch
-import matplotlib.pyplot as plt
-import time
-import os
-
 plt.style.use('ggplot')
+
+# Argument parser setup
+parser = argparse.ArgumentParser(description='Training script with epochs argument.')
+parser.add_argument('--epochs', type=int, default=NUM_EPOCHS,
+                    help='Number of epochs to train (default: NUM_EPOCHS in config)')
+args = parser.parse_args()
+
+NUM_EPOCHS = args.epochs
 
 seed = 42
 torch.manual_seed(seed)
@@ -44,7 +53,7 @@ def train(train_data_loader, model):
     print('Training')
     model.train()
     
-     # initialize tqdm progress bar
+    # initialize tqdm progress bar
     prog_bar = tqdm(train_data_loader, total=len(train_data_loader))
     
     for i, data in enumerate(prog_bar):
@@ -136,7 +145,7 @@ if __name__ == '__main__':
     map_50_list = []
     map_list = []
 
-    # Mame to save the trained model with.
+    # Name to save the trained model with.
     MODEL_NAME = 'model'
 
     # Whether to show transformed images from data loader or not.
@@ -169,7 +178,7 @@ if __name__ == '__main__':
         map_50_list.append(metric_summary['map_50'])
         map_list.append(metric_summary['map'])
 
-        # save the best model till now.
+        # Save the best model till now.
         save_best_model(
             model, float(metric_summary['map']), epoch, 'outputs'
         )
