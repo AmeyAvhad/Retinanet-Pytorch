@@ -1,83 +1,114 @@
-import torch
-import torchvision.transforms as transforms
-from torch.utils.data import DataLoader
 import numpy as np
-from tqdm import tqdm
-from collections import defaultdict
+import cv2
+import torch
+import glob as glob
+import os
+import time
+import argparse
+import matplotlib.pyplot as plt
 
-# Assuming you have a custom dataset class similar to `CustomDataset` provided
-from datasets import CustomDataset  # Update with your actual dataset module
+from model import create_model
+from datasets import CustomDataset
+from config import (
+    NUM_CLASSES, DEVICE, CLASSES, VALID_DIR
+)
 
-# Function to calculate IoU (Intersection over Union)
-def calculate_iou(box1, box2):
-    x1 = max(box1[0], box2[0])
-    y1 = max(box1[1], box2[1])
-    x2 = min(box1[2], box2[2])
-    y2 = min(box1[3], box2[3])
+from torch.utils.data import DataLoader
+from torchvision.transforms.functional import to_tensor
 
-    intersection_area = max(0, x2 - x1) * max(0, y2 - y1)
+from sklearn.metrics import precision_score, recall_score
 
-    box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
-    box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+np.random.seed(42)
 
-    iou = intersection_area / float(box1_area + box2_area - intersection_area)
-    return iou
+# Construct the argument parser.
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    '--threshold',
+    default=0.5,
+    type=float,
+    help='detection threshold'
+)
+args = vars(parser.parse_args())
 
-# Function to calculate precision and recall
-def calculate_precision_recall(predictions, targets, iou_threshold=0.5):
-    true_positives = defaultdict(int)
-    false_positives = defaultdict(int)
-    false_negatives = defaultdict(int)
+# Load the best model and trained weights.
+model = create_model(num_classes=NUM_CLASSES)
+checkpoint = torch.load('outputs/best_model.pth', map_location=DEVICE)
+model.load_state_dict(checkpoint['model_state_dict'])
+model.to(DEVICE).eval()
 
-    for pred_boxes, target_boxes in tqdm(zip(predictions, targets), total=len(predictions)):
-        detected = []
-        for pred_box in pred_boxes['boxes']:
-            is_tp = False
-            for target_box in target_boxes['boxes']:
-                iou = calculate_iou(pred_box, target_box)
-                if iou >= iou_threshold and tuple(target_box) not in detected:
-                    true_positives[pred_boxes['labels'][pred_boxes['boxes'].tolist().index(pred_box)]] += 1
-                    detected.append(tuple(target_box))
-                    is_tp = True
-                    break
-            if not is_tp:
-                false_positives[pred_boxes['labels'][pred_boxes['boxes'].tolist().index(pred_box)]] += 1
+# Define the validation dataset and data loader.
+valid_dataset = CustomDataset(
+    VALID_DIR, RESIZE_TO, RESIZE_TO, CLASSES
+)
+valid_loader = DataLoader(
+    valid_dataset,
+    batch_size=1,
+    shuffle=False,
+    num_workers=4,
+    collate_fn=collate_fn,
+    drop_last=False
+)
 
-        for target_box in target_boxes['boxes']:
-            if tuple(target_box) not in detected:
-                false_negatives[target_boxes['labels'][target_boxes['boxes'].tolist().index(target_box)]] += 1
+# Lists to store ground truth and prediction values.
+true_boxes = []
+true_labels = []
+pred_boxes = []
+pred_scores = []
+pred_labels = []
 
-    # Compute precision and recall per class
-    precision = {}
-    recall = {}
-    for label in set(list(true_positives.keys()) + list(false_negatives.keys())):
-        precision[label] = true_positives[label] / float(true_positives[label] + false_positives[label] + 1e-6)
-        recall[label] = true_positives[label] / float(true_positives[label] + false_negatives[label] + 1e-6)
+# Iterate through the validation dataset.
+for images, targets in valid_loader:
+    # Move images and targets to device.
+    images = list(image.to(DEVICE) for image in images)
+    targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in targets]
+    
+    # Forward pass through the model.
+    with torch.no_grad():
+        outputs = model(images)
 
-    return precision, recall
+    # Post-process outputs to get predictions.
+    for i in range(len(images)):
+        true_boxes.append(targets[i]['boxes'].cpu().numpy())
+        true_labels.append(targets[i]['labels'].cpu().numpy())
 
-# Load the model
-model = torch.load('/content/outputs/best_model.pth')  # Load your model here
-model.eval()
+        boxes = outputs[i]['boxes'].detach().cpu().numpy()
+        scores = outputs[i]['scores'].detach().cpu().numpy()
+        labels = outputs[i]['labels'].detach().cpu().numpy()
 
-# Assuming you have a DataLoader for your test dataset
-test_dataset = CustomDataset('/content/Retinanet-1/test', RESIZE_TO, RESIZE_TO, CLASSES, transforms=None)  # Update with your dataset parameters
-test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+        # Apply detection threshold.
+        boxes = boxes[scores >= args['threshold']]
+        labels = labels[scores >= args['threshold']]
+        scores = scores[scores >= args['threshold']]
 
-predictions = []
-targets = []
+        pred_boxes.append(boxes)
+        pred_scores.append(scores)
+        pred_labels.append(labels)
 
-# Run inference on test dataset
-with torch.no_grad():
-    for image, target in test_loader:
-        image = image.cuda()  # Assuming CUDA is available
-        output = model(image)
-        predictions.append(output)
-        targets.append(target)
+# Flatten lists for computing precision and recall.
+true_boxes_flat = np.concatenate(true_boxes, axis=0)
+true_labels_flat = np.concatenate(true_labels, axis=0)
+pred_boxes_flat = np.concatenate(pred_boxes, axis=0)
+pred_scores_flat = np.concatenate(pred_scores, axis=0)
+pred_labels_flat = np.concatenate(pred_labels, axis=0)
 
-# Calculate precision and recall
-precision, recall = calculate_precision_recall(predictions, targets)
+# Compute precision and recall for each class.
+precision = precision_score(true_labels_flat, pred_labels_flat, average=None)
+recall = recall_score(true_labels_flat, pred_labels_flat, average=None)
 
-# Print precision and recall for each class
-for label, prec in precision.items():
-    print(f'Class: {label}, Precision: {prec:.4f}, Recall: {recall[label]:.4f}')
+# Print precision and recall for each class.
+for idx, cls in enumerate(CLASSES):
+    if cls == '__background__':
+        continue
+    print(f'Class: {cls}')
+    print(f'Precision: {precision[idx]:.4f}')
+    print(f'Recall: {recall[idx]:.4f}')
+    print('-' * 20)
+
+# Optionally, you can compute mAP using tools like sklearn or specific metrics libraries.
+
+# Example code for computing mAP with sklearn
+# from sklearn.metrics import average_precision_score
+# average_precision = average_precision_score(true_labels_flat, pred_scores_flat)
+
+# Print mAP if needed.
+# print(f'mAP: {average_precision:.4f}')
