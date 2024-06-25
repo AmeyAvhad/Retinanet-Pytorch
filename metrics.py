@@ -4,10 +4,11 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 from torchvision.ops import box_iou
-from config import CLASSES, NUM_CLASSES, DEVICE, TEST_DIR, RESIZE_TO
+from config import CLASSES, NUM_CLASSES, DEVICE, RESIZE_TO
 from custom_utils import get_valid_transform
 from model import create_model
 from datasets import CustomDataset
+import argparse
 
 # Function to calculate Average Precision (AP) for each class
 def calculate_ap(recall, precision):
@@ -21,6 +22,11 @@ def calculate_ap(recall, precision):
     ap = np.sum((recall[indices + 1] - recall[indices]) * precision[indices + 1])
     return ap
 
+# Parse command-line arguments
+parser = argparse.ArgumentParser()
+parser.add_argument('-t', '--test_dir', required=True, help='Path to the test directory')
+args = parser.parse_args()
+
 # Load the model
 model = create_model(num_classes=NUM_CLASSES)
 checkpoint = torch.load('/content/outputs/best_model.pth', map_location=DEVICE)
@@ -28,7 +34,7 @@ model.load_state_dict(checkpoint['model_state_dict'])
 model.to(DEVICE).eval()
 
 # Prepare the dataset and dataloader
-test_dataset = CustomDataset(TEST_DIR, RESIZE_TO, RESIZE_TO, CLASSES, get_valid_transform())
+test_dataset = CustomDataset(args.test_dir, RESIZE_TO, RESIZE_TO, CLASSES, get_valid_transform())
 test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
 
 # Store all true boxes and predicted boxes
