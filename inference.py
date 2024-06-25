@@ -5,6 +5,7 @@ import glob as glob
 import os
 import time
 import argparse
+import matplotlib.pyplot as plt
 
 from model import create_model
 
@@ -117,14 +118,17 @@ for i in range(len(test_images)):
                         2, 
                         lineType=cv2.LINE_AA)
 
-        cv2.imshow('Prediction', orig_image)
-        cv2.waitKey(1)
+        # Display the image using Matplotlib
+        plt.figure(figsize=(10, 10))
+        plt.imshow(cv2.cvtColor(orig_image, cv2.COLOR_BGR2RGB))
+        plt.axis('off')
+        plt.show()
+
         cv2.imwrite(f"inference_outputs/images/{image_name}.jpg", orig_image)
     print(f"Image {i+1} done...")
     print('-'*50)
 
 print('TEST PREDICTIONS COMPLETE')
-cv2.destroyAllWindows()
 # Calculate and print the average FPS.
 avg_fps = total_fps / frame_count
 print(f"Average FPS: {avg_fps:.3f}")
