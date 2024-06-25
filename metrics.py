@@ -1,6 +1,4 @@
 import torch
-import torchvision
-import cv2
 import numpy as np
 from tqdm import tqdm
 from torchvision.ops import box_iou
@@ -49,6 +47,11 @@ with torch.no_grad():
         
         for target, output in zip(targets, outputs):
             try:
+                if isinstance(target, str):
+                    # Handle case where target is unexpectedly a string
+                    print(f"Skipping target: {target}")
+                    continue
+                
                 true_boxes = target['boxes'].cpu().numpy()
                 true_labels = target['labels'].cpu().numpy()
                 pred_boxes = output['boxes'].cpu().numpy()
@@ -115,6 +118,6 @@ for i in range(1, NUM_CLASSES):  # Assuming class 0 is background
 
 # Print the AP for each class and the mAP
 for i in range(1, NUM_CLASSES):
-    print(f"AP for {CLASSES[i]}: {aps[i]:.4f}")
+    print(f"AP for {CLASSES[i]}: {aps[i-1]:.4f}")  # Note the index adjustment since aps does not include background class
 mAP = np.mean(aps)
 print(f"mAP: {mAP:.4f}")
