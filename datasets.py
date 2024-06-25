@@ -185,9 +185,11 @@ if __name__ == '__main__':
                 (0, 0, 255), 
                 2
             )
+        # Ensure the values are within the valid range for imshow
+        image = np.clip(image, 0, 1)
         # Use Matplotlib to display the image
         plt.figure(figsize=(10, 10))
-        plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        plt.imshow(image)
         plt.axis('off')
         plt.show()
         
