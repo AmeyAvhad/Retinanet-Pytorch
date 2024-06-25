@@ -48,23 +48,29 @@ with torch.no_grad():
         outputs = model(images)
         
         for target, output in zip(targets, outputs):
-            true_boxes = target['boxes'].cpu().numpy()
-            true_labels = target['labels'].cpu().numpy()
-            pred_boxes = output['boxes'].cpu().numpy()
-            pred_labels = output['labels'].cpu().numpy()
-            scores = output['scores'].cpu().numpy()
+            try:
+                true_boxes = target['boxes'].cpu().numpy()
+                true_labels = target['labels'].cpu().numpy()
+                pred_boxes = output['boxes'].cpu().numpy()
+                pred_labels = output['labels'].cpu().numpy()
+                scores = output['scores'].cpu().numpy()
 
-            for i in range(len(true_boxes)):
-                box = true_boxes[i]
-                label = true_labels[i]
-                all_true_boxes[label].append(box)
-            
-            for i in range(len(pred_boxes)):
-                box = pred_boxes[i]
-                label = pred_labels[i]
-                score = scores[i]
-                all_pred_boxes[label].append(box)
-                all_scores[label].append(score)
+                for i in range(len(true_boxes)):
+                    box = true_boxes[i]
+                    label = true_labels[i]
+                    all_true_boxes[label].append(box)
+                
+                for i in range(len(pred_boxes)):
+                    box = pred_boxes[i]
+                    label = pred_labels[i]
+                    score = scores[i]
+                    all_pred_boxes[label].append(box)
+                    all_scores[label].append(score)
+            except Exception as e:
+                print(f"Error processing target: {e}")
+                print(f"Target type: {type(target)}")
+                print(f"Target contents: {target}")
+                continue
 
 # Calculate AP for each class
 aps = []
