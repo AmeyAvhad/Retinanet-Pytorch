@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from model import create_model
 from datasets import CustomDataset
 from config import (
-    NUM_CLASSES, DEVICE, CLASSES, VALID_DIR
+    NUM_CLASSES, DEVICE, CLASSES, VALID_DIR, RESIZE_TO
 )
 
 from torch.utils.data import DataLoader
