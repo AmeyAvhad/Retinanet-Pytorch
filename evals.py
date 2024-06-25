@@ -1,90 +1,88 @@
 import torch
 from tqdm import tqdm
-from config import DEVICE, NUM_CLASSES, NUM_WORKERS
-from torchmetrics import IoU
+import config  # Importing config.py file to access CLASSES
 from model import create_model
 from datasets import create_valid_dataset, create_valid_loader
 
-# Evaluation function
-def compute_precision_recall(predictions, targets, num_classes, iou_threshold=0.5):
-    iou = IoU(num_classes=num_classes)
+# Function to compute Intersection over Union (IoU)
+def calculate_iou(box1, box2):
+    # Calculate intersection coordinates
+    intersection_top_left = torch.max(box1[:, None, :2], box2[:, :2])
+    intersection_bottom_right = torch.min(box1[:, None, 2:], box2[:, 2:])
+    
+    # Calculate intersection area
+    intersection_area = torch.prod(intersection_bottom_right - intersection_top_left, dim=2) * (intersection_top_left < intersection_bottom_right).all(dim=2)
+    
+    # Calculate box areas
+    box1_area = torch.prod(box1[:, 2:] - box1[:, :2], dim=1)
+    box2_area = torch.prod(box2[:, 2:] - box2[:, :2], dim=1)
+    
+    # Calculate union area
+    union_area = box1_area[:, None] + box2_area - intersection_area
+    
+    # Calculate IoU
+    iou = intersection_area / union_area
+    
+    return iou
 
+# Function to compute precision, recall, and mAP per class
+def compute_metrics(predictions, targets, num_classes, class_names, iou_threshold=0.5):
     precision = torch.zeros(num_classes)
     recall = torch.zeros(num_classes)
-
-    for pred, target in zip(predictions, targets):
-        pred_boxes = pred['boxes']
-        pred_labels = pred['labels']
-        pred_scores = pred['scores']
-
-        target_boxes = target['boxes']
-        target_labels = target['labels']
-
-        iou_value = iou(pred_boxes, target_boxes, pred_labels, target_labels)
-
-        # Compute true positives and false negatives
-        for cls in range(num_classes):
-            true_positives = (iou_value >= iou_threshold).logical_and(pred_labels == cls + 1).sum().item()
-            false_negatives = (iou_value < iou_threshold).logical_and(target_labels == cls + 1).sum().item()
-
-            if (pred_labels == cls + 1).any():
-                precision[cls] += true_positives / (true_positives + (pred_labels == cls + 1).sum().item() - true_positives)
-            if (target_labels == cls + 1).any():
-                recall[cls] += true_positives / (true_positives + false_negatives)
-
-    precision /= len(predictions)
-    recall /= len(targets)
-
-    return precision, recall
-
-# Function to compute mAP
-def compute_mAP(predictions, targets, num_classes):
-    iou = IoU(num_classes=num_classes)
     ap = torch.zeros(num_classes)
 
     for cls in range(num_classes):
-        class_predictions = [pred for pred, target in zip(predictions, targets) if (pred['labels'] == cls + 1).any()]
-        class_targets = [target for pred, target in zip(predictions, targets) if (target['labels'] == cls + 1).any()]
+        true_positives = 0
+        false_positives = 0
+        false_negatives = 0
+        total_targets = 0
 
-        if len(class_predictions) == 0 or len(class_targets) == 0:
-            continue
+        for pred, target in zip(predictions, targets):
+            pred_boxes = pred['boxes'][pred['labels'] == cls]
+            pred_scores = pred['scores'][pred['labels'] == cls]
+            target_boxes = target['boxes'][target['labels'] == cls]
 
-        pred_boxes = torch.cat([pred['boxes'] for pred in class_predictions], dim=0)
-        pred_scores = torch.cat([pred['scores'] for pred in class_predictions], dim=0)
-        target_boxes = torch.cat([target['boxes'] for target in class_targets], dim=0)
+            total_targets += len(target_boxes)
 
-        sorted_indices = torch.argsort(pred_scores, descending=True)
-        pred_boxes = pred_boxes[sorted_indices]
-        pred_scores = pred_scores[sorted_indices]
+            if len(pred_boxes) == 0 or len(target_boxes) == 0:
+                false_negatives += len(target_boxes)
+                continue
 
-        iou_value = iou(pred_boxes, target_boxes)
+            iou = calculate_iou(pred_boxes, target_boxes)
+            if iou.numel() > 0:  # Check if iou tensor is not empty
+                max_iou, _ = iou.max(dim=1)
+                true_positives += (max_iou >= iou_threshold).sum().item()
+                false_positives += (max_iou < iou_threshold).sum().item()
+                false_negatives += (max_iou < iou_threshold).sum().item()
 
-        true_positives = (iou_value >= 0.5).sum().item()
-        false_positives = len(pred_boxes) - true_positives
+        # Compute precision and recall
+        if true_positives + false_positives > 0:
+            precision[cls] = true_positives / (true_positives + false_positives)
+        if true_positives + false_negatives > 0:
+            recall[cls] = true_positives / (true_positives + false_negatives)
 
-        precision = true_positives / (true_positives + false_positives)
-        recall = true_positives / len(target_boxes)
+        # Compute AP (Average Precision)
+        if true_positives > 0:
+            ap[cls] = precision[cls] * recall[cls]
 
-        ap[cls] = precision * recall
-
-    return ap
+    return precision, recall, ap
 
 if __name__ == '__main__':
-    model = create_model(num_classes=NUM_CLASSES)
-    checkpoint = torch.load('outputs/best_model.pth', map_location=DEVICE)
+    model = create_model(num_classes=config.NUM_CLASSES)
+    checkpoint = torch.load('outputs/best_model.pth', map_location=config.DEVICE)
     model.load_state_dict(checkpoint['model_state_dict'])
-    model.to(DEVICE).eval()
+    model.to(config.DEVICE).eval()
 
-    test_dataset = create_valid_dataset('/content/Retinanet-1/test')
-    test_loader = create_valid_loader(test_dataset, num_workers=NUM_WORKERS)
+    test_dataset = create_valid_dataset(config.VALID_DIR)
+    test_loader = create_valid_loader(test_dataset, num_workers=config.NUM_WORKERS)
 
     predictions = []
     targets = []
 
     # Iterate through the test loader
     for images, batch_targets in tqdm(test_loader, total=len(test_loader)):
-        images = [image.to(DEVICE) for image in images]
-        batch_targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in batch_targets]
+        images = [image.to(config.DEVICE) for image in images]
+        batch_targets = [{k: v.to(config.DEVICE) for k, v in t.items()} for t in batch_targets]
 
         with torch.no_grad():
             outputs = model(images)
@@ -100,16 +98,14 @@ if __name__ == '__main__':
                 'labels': target['labels'].cpu()
             })
 
-    num_classes = NUM_CLASSES
+    num_classes = config.NUM_CLASSES
+    class_names = config.CLASSES  # Use CLASSES from config.py
 
-    # Compute precision and recall
-    precision, recall = compute_precision_recall(predictions, targets, num_classes)
-
-    # Compute mAP
-    ap = compute_mAP(predictions, targets, num_classes)
+    # Compute precision, recall, and mAP
+    precision, recall, ap = compute_metrics(predictions, targets, num_classes, class_names)
 
     for cls in range(num_classes):
-        print(f"Class {cls}:")
+        print(f"{class_names[cls]}:")
         print(f"\tPrecision: {precision[cls]:.4f}")
         print(f"\tRecall: {recall[cls]:.4f}")
         print(f"\tmAP: {ap[cls]:.4f}")
