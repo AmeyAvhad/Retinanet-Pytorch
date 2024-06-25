@@ -50,7 +50,7 @@ if __name__ == '__main__':
     model.to(DEVICE).eval()
 
     test_dataset = create_valid_dataset(
-        'data/BCCD.v3-raw.voc/test'
+        '/content/Retinanet-1/test'
     )
     test_loader = create_valid_loader(test_dataset, num_workers=NUM_WORKERS)
 
