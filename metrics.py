@@ -1,123 +1,83 @@
 import torch
+import torchvision.transforms as transforms
+from torch.utils.data import DataLoader
 import numpy as np
 from tqdm import tqdm
-from torchvision.ops import box_iou
-from config import CLASSES, NUM_CLASSES, DEVICE, RESIZE_TO
-from custom_utils import get_valid_transform
-from model import create_model
-from datasets import CustomDataset
-import argparse
+from collections import defaultdict
 
-# Function to calculate Average Precision (AP) for each class
-def calculate_ap(recall, precision):
-    recall = np.concatenate(([0.0], recall, [1.0]))
-    precision = np.concatenate(([0.0], precision, [0.0]))
-    
-    for i in range(precision.size - 1, 0, -1):
-        precision[i - 1] = np.maximum(precision[i - 1], precision[i])
-    
-    indices = np.where(recall[1:] != recall[:-1])[0]
-    ap = np.sum((recall[indices + 1] - recall[indices]) * precision[indices + 1])
-    return ap
+# Assuming you have a custom dataset class similar to `CustomDataset` provided
+from datasets import CustomDataset  # Update with your actual dataset module
 
-# Parse command-line arguments
-parser = argparse.ArgumentParser()
-parser.add_argument('-t', '--test_dir', required=True, help='Path to the test directory')
-args = parser.parse_args()
+# Function to calculate IoU (Intersection over Union)
+def calculate_iou(box1, box2):
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+
+    intersection_area = max(0, x2 - x1) * max(0, y2 - y1)
+
+    box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+
+    iou = intersection_area / float(box1_area + box2_area - intersection_area)
+    return iou
+
+# Function to calculate precision and recall
+def calculate_precision_recall(predictions, targets, iou_threshold=0.5):
+    true_positives = defaultdict(int)
+    false_positives = defaultdict(int)
+    false_negatives = defaultdict(int)
+
+    for pred_boxes, target_boxes in tqdm(zip(predictions, targets), total=len(predictions)):
+        detected = []
+        for pred_box in pred_boxes['boxes']:
+            is_tp = False
+            for target_box in target_boxes['boxes']:
+                iou = calculate_iou(pred_box, target_box)
+                if iou >= iou_threshold and tuple(target_box) not in detected:
+                    true_positives[pred_boxes['labels'][pred_boxes['boxes'].tolist().index(pred_box)]] += 1
+                    detected.append(tuple(target_box))
+                    is_tp = True
+                    break
+            if not is_tp:
+                false_positives[pred_boxes['labels'][pred_boxes['boxes'].tolist().index(pred_box)]] += 1
+
+        for target_box in target_boxes['boxes']:
+            if tuple(target_box) not in detected:
+                false_negatives[target_boxes['labels'][target_boxes['boxes'].tolist().index(target_box)]] += 1
+
+    # Compute precision and recall per class
+    precision = {}
+    recall = {}
+    for label in set(list(true_positives.keys()) + list(false_negatives.keys())):
+        precision[label] = true_positives[label] / float(true_positives[label] + false_positives[label] + 1e-6)
+        recall[label] = true_positives[label] / float(true_positives[label] + false_negatives[label] + 1e-6)
+
+    return precision, recall
 
 # Load the model
-model = create_model(num_classes=NUM_CLASSES)
-checkpoint = torch.load('/content/outputs/best_model.pth', map_location=DEVICE)
-model.load_state_dict(checkpoint['model_state_dict'])
-model.to(DEVICE).eval()
+model = torch.load('best_model.pth')  # Load your model here
+model.eval()
 
-# Prepare the dataset and dataloader
-test_dataset = CustomDataset(args.test_dir, RESIZE_TO, RESIZE_TO, CLASSES, get_valid_transform())
-test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
+# Assuming you have a DataLoader for your test dataset
+test_dataset = CustomDataset('/content/Retinanet-1/test', RESIZE_TO, RESIZE_TO, CLASSES, transforms=None)  # Update with your dataset parameters
+test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
-# Store all true boxes and predicted boxes
-all_true_boxes = [[] for _ in range(NUM_CLASSES)]
-all_pred_boxes = [[] for _ in range(NUM_CLASSES)]
-all_scores = [[] for _ in range(NUM_CLASSES)]
+predictions = []
+targets = []
 
+# Run inference on test dataset
 with torch.no_grad():
-    for images, targets in tqdm(test_loader):
-        images = list(image.to(DEVICE) for image in images)
-        outputs = model(images)
-        
-        for target, output in zip(targets, outputs):
-            try:
-                if isinstance(target, str):
-                    # Handle case where target is unexpectedly a string
-                    print(f"Skipping target: {target}")
-                    continue
-                
-                true_boxes = target['boxes'].cpu().numpy()
-                true_labels = target['labels'].cpu().numpy()
-                pred_boxes = output['boxes'].cpu().numpy()
-                pred_labels = output['labels'].cpu().numpy()
-                scores = output['scores'].cpu().numpy()
+    for image, target in test_loader:
+        image = image.cuda()  # Assuming CUDA is available
+        output = model(image)
+        predictions.append(output)
+        targets.append(target)
 
-                for i in range(len(true_boxes)):
-                    box = true_boxes[i]
-                    label = true_labels[i]
-                    all_true_boxes[label].append(box)
-                
-                for i in range(len(pred_boxes)):
-                    box = pred_boxes[i]
-                    label = pred_labels[i]
-                    score = scores[i]
-                    all_pred_boxes[label].append(box)
-                    all_scores[label].append(score)
-            except Exception as e:
-                print(f"Error processing target: {e}")
-                print(f"Target type: {type(target)}")
-                print(f"Target contents: {target}")
-                continue
+# Calculate precision and recall
+precision, recall = calculate_precision_recall(predictions, targets)
 
-# Calculate AP for each class
-aps = []
-for i in range(1, NUM_CLASSES):  # Assuming class 0 is background
-    true_boxes = np.array(all_true_boxes[i])
-    pred_boxes = np.array(all_pred_boxes[i])
-    scores = np.array(all_scores[i])
-    
-    if len(true_boxes) == 0 or len(pred_boxes) == 0:
-        aps.append(0)
-        continue
-    
-    sorted_indices = np.argsort(-scores)
-    pred_boxes = pred_boxes[sorted_indices]
-    scores = scores[sorted_indices]
-
-    tp = np.zeros(len(pred_boxes))
-    fp = np.zeros(len(pred_boxes))
-    total_true_boxes = len(true_boxes)
-    
-    detected_boxes = []
-    
-    for j in range(len(pred_boxes)):
-        pred_box = pred_boxes[j]
-        ious = box_iou(torch.tensor(pred_box).unsqueeze(0), torch.tensor(true_boxes))
-        max_iou, max_iou_index = ious.max(1)
-        
-        if max_iou > 0.5 and max_iou_index not in detected_boxes:
-            tp[j] = 1
-            detected_boxes.append(max_iou_index)
-        else:
-            fp[j] = 1
-    
-    tp_cumsum = np.cumsum(tp)
-    fp_cumsum = np.cumsum(fp)
-    
-    recall = tp_cumsum / total_true_boxes
-    precision = tp_cumsum / (tp_cumsum + fp_cumsum)
-    
-    ap = calculate_ap(recall, precision)
-    aps.append(ap)
-
-# Print the AP for each class and the mAP
-for i in range(1, NUM_CLASSES):
-    print(f"AP for {CLASSES[i]}: {aps[i-1]:.4f}")  # Note the index adjustment since aps does not include background class
-mAP = np.mean(aps)
-print(f"mAP: {mAP:.4f}")
+# Print precision and recall for each class
+for label, prec in precision.items():
+    print(f'Class: {label}, Precision: {prec:.4f}, Recall: {recall[label]:.4f}')
