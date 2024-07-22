@@ -1,59 +1,99 @@
-import torch
 import numpy as np
-import seaborn as sns
+import torch
+import argparse
+import os
 import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix
-import config  # Assuming config.py contains CLASSES and other configurations
+import seaborn as sns
 
-# Function to get predicted and true labels
-def get_predicted_true_labels(model, data_loader):
-    predicted_labels = []
-    true_labels = []
+from model import create_model
+from config import (
+    DEVICE, 
+    NUM_CLASSES, 
+    VALID_DIR,
+    RESIZE_TO
+)
+from datasets import create_valid_loader, create_valid_dataset  # Import create_valid_dataset
 
-    model.eval()
+from torchmetrics import ConfusionMatrix
 
-    for images, batch_targets in data_loader:
-        images = [image.to(config.DEVICE) for image in images]
-        batch_targets = [{k: v.to(config.DEVICE) for k, v in t.items()} for t in batch_targets]
-
-        with torch.no_grad():
-            outputs = model(images)
-
-        for output, target in zip(outputs, batch_targets):
-            pred_labels = output['labels'].cpu().numpy()
-            true_labels.extend(target['labels'].cpu().numpy())
-
-            # If using softmax for classification, get the predicted class as the one with highest score
-            # pred_labels = np.argmax(output['scores'].cpu().numpy(), axis=1)
-
-            predicted_labels.extend(pred_labels)
-
-    return predicted_labels, true_labels
-
-# Function to plot confusion matrix using Seaborn
-def plot_confusion_matrix(y_true, y_pred, classes):
-    cm = confusion_matrix(y_true, y_pred, labels=np.arange(len(classes)))
-    cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]  # Normalize confusion matrix
-
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(cm, annot=True, cmap='Blues', fmt='.2f', xticklabels=classes, yticklabels=classes)
-    plt.title('Normalized Confusion Matrix')
-    plt.xlabel('Predicted Labels')
-    plt.ylabel('True Labels')
-    plt.xticks(rotation=45)
-    plt.yticks(rotation=0)
+def plot_confusion_matrix(cm, class_names, output_dir):
+    plt.figure(figsize=(8, 6))  # Adjust figure size as needed
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=class_names, yticklabels=class_names)
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.title('Confusion Matrix')
+    
+    # Save the plot to the outputs folder
+    os.makedirs(output_dir, exist_ok=True)
+    plt.savefig(os.path.join(output_dir, 'confusion_matrix.png'))
+    
     plt.show()
 
+def evaluate(valid_data_loader, model):
+    print('Evaluating')
+    model.eval()
+    
+    target = []
+    preds = []
+    all_true_labels = []
+    all_pred_labels = []
+    
+    for data in valid_data_loader:
+        images, targets = data
+        
+        images = list(image.to(DEVICE) for image in images)
+        targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in targets]
+        
+        with torch.no_grad():
+            outputs = model(images, targets)
+
+        # For mAP calculation using Torchmetrics.
+        #####################################
+        for i in range(len(images)):
+            true_dict = dict()
+            preds_dict = dict()
+            true_dict['boxes'] = targets[i]['boxes'].detach().cpu()
+            true_dict['labels'] = targets[i]['labels'].detach().cpu()
+            preds_dict['boxes'] = outputs[i]['boxes'].detach().cpu()
+            preds_dict['scores'] = outputs[i]['scores'].detach().cpu()
+            preds_dict['labels'] = outputs[i]['labels'].detach().cpu()
+            preds.append(preds_dict)
+            target.append(true_dict)
+            
+            # Collect labels for confusion matrix
+            all_true_labels.extend(true_dict['labels'])
+            all_pred_labels.extend(preds_dict['labels'])
+        #####################################
+
+    # Compute confusion matrix manually
+    cm = torch.zeros(NUM_CLASSES, NUM_CLASSES, dtype=torch.int32)
+    for true, pred in zip(all_true_labels, all_pred_labels):
+        cm[true, pred] += 1
+
+    cm = cm.numpy()
+    
+    return cm
+
 if __name__ == '__main__':
-    model = create_model(num_classes=config.NUM_CLASSES)
-    checkpoint = torch.load('outputs/best_model.pth', map_location=config.DEVICE)
+    # Parse the command-line arguments.
+    parser = argparse.ArgumentParser(description='Evaluate the model on the validation set.')
+    parser.add_argument('--model-path', type=str, required=True, help='Path to the trained model.')
+    args = parser.parse_args()
+
+    # Load the trained model.
+    model = create_model(num_classes=NUM_CLASSES, size=RESIZE_TO)
+    checkpoint = torch.load(args.model_path, map_location=DEVICE)
     model.load_state_dict(checkpoint['model_state_dict'])
-    model.to(config.DEVICE).eval()
+    model = model.to(DEVICE)
+    model.eval()
 
-    valid_dataset = create_valid_dataset(config.VALID_DIR)
-    valid_loader = create_valid_loader(valid_dataset, num_workers=config.NUM_WORKERS)
+    # Create the validation data loader.
+    valid_dataset = create_valid_dataset(VALID_DIR)  # Create valid dataset
+    valid_loader = create_valid_loader(valid_dataset, num_workers=4)
 
-    predicted_labels, true_labels = get_predicted_true_labels(model, valid_loader)
+    # Evaluate the model and get the confusion matrix.
+    cm = evaluate(valid_loader, model)
 
-    plot_confusion_matrix(true_labels, predicted_labels, classes=config.CLASSES[1:])  # Exclude '__background__'
-
+    # Plot confusion matrix.
+    class_names = [f'Class {i}' for i in range(NUM_CLASSES)]
+    plot_confusion_matrix(cm, class_names, 'outputs')
